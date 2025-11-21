@@ -1356,12 +1356,12 @@ async function processUrlsSequentially() {
           );
 
           // Open tab
-          const tab = await new Promise((resolve, reject) => {
-            chrome.tabs.create({ url: url, active: false }, (tab) => {
+          let tab = await new Promise((resolve, reject) => {
+            chrome.tabs.create({ url: url, active: false }, (createdTab) => {
               if (chrome.runtime.lastError) {
                 reject(new Error(chrome.runtime.lastError.message));
               } else {
-                resolve(tab);
+                resolve(createdTab);
               }
             });
           });
@@ -1674,12 +1674,40 @@ async function processUrlsSequentially() {
           // Wait a bit more to ensure insertion completes
           await new Promise((resolve) => setTimeout(resolve, 500)); // Reduced from 1000ms
 
-          // Close the tab
-          try {
-            chrome.tabs.remove(tab.id);
-            console.log(`[Background] Tab ${tab.id} closed`);
-          } catch (error) {
-            console.warn(`[Background] Could not close tab ${tab.id}:`, error);
+          // Close the tab - verify it exists first and wait for closure to complete
+          if (tab && tab.id) {
+            try {
+              // Check if tab still exists before closing
+              const tabExists = await new Promise((resolve) => {
+                chrome.tabs.get(tab.id, (tabInfo) => {
+                  if (chrome.runtime.lastError) {
+                    resolve(false);
+                  } else {
+                    resolve(true);
+                  }
+                });
+              });
+
+              if (tabExists) {
+                // Wait for tab to be closed
+                await new Promise((resolve) => {
+                  chrome.tabs.remove(tab.id, () => {
+                    if (chrome.runtime.lastError) {
+                      console.warn(`[Background] Could not close tab ${tab.id}:`, chrome.runtime.lastError.message);
+                    } else {
+                      console.log(`[Background] ✅ Tab ${tab.id} closed successfully after processing URL ${i + 1}`);
+                    }
+                    resolve();
+                  });
+                });
+              } else {
+                console.log(`[Background] Tab ${tab.id} already closed or does not exist`);
+              }
+            } catch (error) {
+              console.warn(`[Background] Error checking/closing tab ${tab.id}:`, error);
+            }
+          } else {
+            console.warn(`[Background] ⚠️ No valid tab to close for URL ${i + 1} (tab: ${tab}, tab.id: ${tab?.id})`);
           }
 
           const currentIndex = totalProcessed + i + 1;
@@ -1776,6 +1804,40 @@ async function processUrlsSequentially() {
           };
           processedUrls.push(failedUrl);
           failedUrls.push(failedUrl); // Track for retry
+
+          // Ensure tab is closed even on error
+          if (tab && tab.id) {
+            try {
+              const tabExists = await new Promise((resolve) => {
+                chrome.tabs.get(tab.id, (tabInfo) => {
+                  if (chrome.runtime.lastError) {
+                    resolve(false);
+                  } else {
+                    resolve(true);
+                  }
+                });
+              });
+
+              if (tabExists) {
+                await new Promise((resolve) => {
+                  chrome.tabs.remove(tab.id, () => {
+                    if (chrome.runtime.lastError) {
+                      console.warn(`[Background] Could not close tab ${tab.id} after error:`, chrome.runtime.lastError.message);
+                    } else {
+                      console.log(`[Background] ✅ Tab ${tab.id} closed after error on URL ${i + 1}`);
+                    }
+                    resolve();
+                  });
+                });
+              } else {
+                console.log(`[Background] Tab ${tab.id} already closed or does not exist`);
+              }
+            } catch (closeError) {
+              console.warn(`[Background] Error closing tab ${tab.id} after error:`, closeError);
+            }
+          } else {
+            console.warn(`[Background] ⚠️ No valid tab to close after error for URL ${i + 1} (tab was not created or is invalid)`);
+          }
 
           // Send progress update even on error
           chrome.runtime
