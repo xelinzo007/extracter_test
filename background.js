@@ -1003,6 +1003,160 @@ async function clearSiteData() {
 }
 
 /**
+ * Clear site data and browser data for makemytrip.com domain
+ * Navigates to https://www.makemytrip.com/ first, then clears both site data and browser data
+ * @returns {Promise<boolean>} - Promise resolving to true if successful
+ */
+async function clearSiteAndBrowserData() {
+  let tab = null;
+  try {
+    console.log(
+      "[Background] 🧹 Navigating to https://www.makemytrip.com/ to clear site data and browser data...",
+    );
+    const cfg = await loadConfig();
+    const clearUrl = "https://www.makemytrip.com/";
+    tab = await new Promise((resolve, reject) => {
+      chrome.tabs.create({ url: clearUrl, active: false }, (createdTab) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(createdTab);
+        }
+      });
+    });
+
+    console.log("[Background] Tab opened for clearing site and browser data:", tab.id);
+
+    await new Promise((resolve) => {
+      let resolved = false;
+      const listener = (tabId, changeInfo) => {
+        if (tabId === tab.id && changeInfo.status === "complete") {
+          if (!resolved) {
+            resolved = true;
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          chrome.tabs.onUpdated.removeListener(listener);
+          resolve();
+        }
+      }, 3000);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    console.log("[Background] 🧹 Clearing site data and browser data for makemytrip.com...");
+
+    const baseDomain = cfg.domain
+      .replace("https://", "")
+      .replace("http://", "");
+    const domainWithoutWww = baseDomain.replace("www.", "");
+    const origins = [
+      `https://www.${domainWithoutWww}`,
+      `https://${domainWithoutWww}`,
+      `https://flights-cb.${domainWithoutWww}`,
+    ];
+
+    if (cfg.cdnDomain) {
+      origins.push(`https://${cfg.cdnDomain}`);
+    }
+
+    console.log("[Background] Clearing site data for origins:", origins);
+
+    // Clear site data (specific origins)
+    await new Promise((resolve, reject) => {
+      chrome.browsingData.remove(
+        {
+          origins: origins,
+        },
+        {
+          cache: true,
+          cookies: true,
+          localStorage: true,
+          indexedDB: true,
+          serviceWorkers: true,
+          cacheStorage: true,
+          fileSystems: true,
+          pluginData: true,
+        },
+        () => {
+          if (chrome.runtime.lastError) {
+            console.error(
+              "[Background] ❌ Error clearing site data:",
+              chrome.runtime.lastError.message,
+            );
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            console.log("[Background] ✅ Site data cleared successfully");
+            resolve();
+          }
+        },
+      );
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    console.log("[Background] 🧹 Clearing browser data (all origins)...");
+
+    // Clear browser data (all origins) - this clears everything
+    await new Promise((resolve, reject) => {
+      chrome.browsingData.remove(
+        {},
+        {
+          cache: true,
+          cookies: true,
+          localStorage: true,
+          indexedDB: true,
+          serviceWorkers: true,
+          cacheStorage: true,
+          fileSystems: true,
+          pluginData: true,
+          downloads: false, // Keep downloads
+          history: false, // Keep history
+          passwords: false, // Keep passwords
+          formData: false, // Keep form data
+        },
+        () => {
+          if (chrome.runtime.lastError) {
+            console.error(
+              "[Background] ❌ Error clearing browser data:",
+              chrome.runtime.lastError.message,
+            );
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            console.log("[Background] ✅ Browser data cleared successfully");
+            resolve();
+          }
+        },
+      );
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    console.log("[Background] ✅ Site data and browser data cleared successfully");
+    return true;
+  } catch (error) {
+    console.error("[Background] ❌ Error in clearSiteAndBrowserData:", error);
+    return false;
+  } finally {
+    if (tab && tab.id) {
+      try {
+        chrome.tabs.remove(tab.id);
+        console.log("[Background] ✅ Tab closed after clearing site and browser data");
+      } catch (error) {
+        console.warn("[Background] Could not close tab:", error);
+      }
+    }
+  }
+}
+
+/**
  * Close and reopen Chrome windows (excluding extension popup)
  * This effectively "restarts" Chrome from the extension's perspective
  * @returns {Promise<boolean>} - Promise resolving to true if successful
@@ -1758,42 +1912,41 @@ async function processUrlsSequentially() {
             await new Promise((resolve) => setTimeout(resolve, 1000));
           }
 
-          // Clear site data after every N URLs (configurable via urlsBeforeClear)
-          // This ensures site data is 0 after processing N URLs, then again after N more, etc.
-          if (currentIndex % urlsBeforeClear === 0) {
+          // Clear site data and browser data after every 20 URLs, then continue with remaining process
+          if (currentIndex % 20 === 0) {
             console.log(
-              `[Background] 🧹 Clearing site data after processing ${currentIndex} URLs (every ${urlsBeforeClear} URLs)...`,
+              `[Background] 🧹 Clearing site data and browser data after processing ${currentIndex} URLs (every 20 URLs)...`,
             );
             chrome.runtime
               .sendMessage({
                 action: "urlProcessingProgress",
                 completed: totalProcessed + i + 1,
                 total: totalProcessed + totalUrls,
-                message: `Navigating to https://www.makemytrip.com/ and clearing site data after ${currentIndex} URLs...`,
+                message: `Navigating to https://www.makemytrip.com/ and clearing site data and browser data after ${currentIndex} URLs...`,
               })
               .catch(() => {});
 
-            const clearSuccess = await clearSiteData();
+            const clearSuccess = await clearSiteAndBrowserData();
             if (clearSuccess) {
               console.log(
-                `[Background] ✅ Site data cleared. Site data is now 0.`,
+                `[Background] ✅ Site data and browser data cleared. Continuing with remaining process...`,
               );
               chrome.runtime
                 .sendMessage({
                   action: "urlProcessingProgress",
                   completed: totalProcessed + i + 1,
                   total: totalProcessed + totalUrls,
-                  message: `Site data cleared. Continuing with next URLs...`,
+                  message: `Site data and browser data cleared. Continuing with next URLs...`,
                 })
                 .catch(() => {});
             } else {
               console.warn(
-                `[Background] ⚠️ Failed to clear site data, but continuing...`,
+                `[Background] ⚠️ Failed to clear site data and browser data, but continuing with remaining process...`,
               );
             }
 
             // Wait a bit after clearing before processing next URL
-            await new Promise((resolve) => setTimeout(resolve, 1000)); // Reduced from 2000ms
+            await new Promise((resolve) => setTimeout(resolve, 1000));
           }
         } catch (error) {
           console.error(`[Background] Error processing URL ${i + 1}:`, error);
