@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pdfcreater</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>✈️ pdfcreater</h1>
+      <p class="subtitle">Extract structured flight data from travel sites</p>
+    </header>
+
+    <div class="status" id="status">
+      <span id="statusText">Ready to extract</span>
+    </div>
+
+    <div class="alert" id="alert" style="display: none;">
+      <span id="alertText"></span>
+      <button id="alertClose" class="alert-close">&times;</button>
+    </div>
+
+    <div class="progress" id="progress" style="display: none;">
+      <div class="progress-header">
+        <span id="progressText">Processing...</span>
+        <div class="progress-meta">
+          <span id="progressTimer" class="progress-timer">⏱ 00:00</span>
+          <span id="progressCounter">0/0</span>
+        </div>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <div class="progress-details" id="progressDetails"></div>
+      <div class="progress-duration" id="progressDurationSummary" style="display: none;"></div>
+    </div>
+
+    <div class="actions">
+      <button id="processUrlsBtn" class="btn btn-primary" style="width: 100%; padding: 15px; font-size: 16px;">
+        Process URLs from Config<br>
+        <small style="font-size: 0.9em;">Open URLs one by one and download API responses</small>
+      </button>
+      <!-- <button id="extractIntlRoundTripBtn" class="btn btn-primary">
+        Extract International Flights<br>
+        <small style="font-size: 0.8em;">(International: One-way & Round Trip)</small>
+      </button>
+      <button id="copyBtn" class="btn btn-secondary" disabled>
+        Copy JSON
+      </button>
+      <button id="downloadBtn" class="btn btn-secondary" disabled>
+        Download JSON
+      </button>
+      <button id="downloadLogsBtn" class="btn btn-secondary">
+        Download Logs
+      </button> -->
+    </div>
+
+    <div class="info" id="info">
+      <p><strong>Note:</strong> Click the button to process all URLs from config.json. URLs will be opened one by one with a 10-second delay, and API responses will be automatically downloaded.</p>
+    </div>
+
+    <div class="results" id="results" style="display: none;">
+      <div class="results-header">
+        <h2>Extracted Data</h2>
+        <div class="results-stats">
+          <span class="flight-count" id="flightCount"></span>
+          <span class="execution-time" id="executionTime"></span>
+        </div>
+      </div>
+      <div class="json-container">
+        <pre id="jsonOutput"></pre>
+      </div>
+    </div>
+
+    <footer>
+      <p class="disclaimer">
+        ⚠️ Use responsibly. Respect website terms of service.
+      </p>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
+

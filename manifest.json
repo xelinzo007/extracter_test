@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "pdf",
+  "version": "1.0.0",
+  "description": "Extract structured flight data from travel sites like MakeMyTrip",
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "storage",
+    "tabs",
+    "debugger",
+    "scripting",
+    "webRequest",
+    "cookies",
+    "alarms",
+    "browsingData",
+    "windows"
+  ],
+  "host_permissions": [
+    "https://*.makemytrip.com/*",
+    "https://*.mmtcdn.net/*",
+    "https://flights-cb.makemytrip.com/*",
+    "https://mmt-new.mfilterit.net/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.makemytrip.com/*",
+        "https://*.mmtcdn.net/*",
+        "https://flights-cb.makemytrip.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
+ 
