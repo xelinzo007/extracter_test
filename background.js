@@ -1410,59 +1410,266 @@ async function processUrlsSequentially() {
           // Wait a bit for page to initialize
           await new Promise((resolve) => setTimeout(resolve, 1000)); // Reduced from 2000ms
 
-          // Send message to content script to search and download API response
-          try {
-            const downloadResponse = await new Promise((resolve) => {
-              chrome.tabs.sendMessage(
-                tab.id,
-                {
-                  action: "searchAndDownloadStreamAPI",
-                },
-                (response) => {
-                  if (chrome.runtime.lastError) {
-                    resolve({
-                      success: false,
-                      error: chrome.runtime.lastError.message,
-                    });
-                  } else {
-                    resolve(response || { success: false });
-                  }
-                },
-              );
-            });
+          // Retry logic for 200-OK or in-flight responses
+          const PAUSE_ON_200_OK_OR_INFLIGHT = 5 * 60 * 1000; // 5 minutes in milliseconds
+          const MAX_RETRIES_FOR_URL = 2; // Maximum 2 retries (initial + 2 retries = 3 total attempts)
+          let urlRetryCount = 0;
+          let urlProcessed = false;
+          let currentTab = tab;
 
-            if (downloadResponse && downloadResponse.success) {
-              console.log(
-                `[Background] ✅ API response downloaded for URL ${i + 1}`,
+          while (urlRetryCount <= MAX_RETRIES_FOR_URL && !urlProcessed) {
+            try {
+              // Send message to content script to search and download API response
+              const downloadResponse = await new Promise((resolve) => {
+                chrome.tabs.sendMessage(
+                  currentTab.id,
+                  {
+                    action: "searchAndDownloadStreamAPI",
+                  },
+                  (response) => {
+                    if (chrome.runtime.lastError) {
+                      resolve({
+                        success: false,
+                        error: chrome.runtime.lastError.message,
+                      });
+                    } else {
+                      resolve(response || { success: false });
+                    }
+                  },
+                );
+              });
+
+              // Check if response contains "200 OK" or is in-flight (no data available)
+              const responseMessage = downloadResponse?.message || "";
+              const responseString = typeof downloadResponse === "string" 
+                ? downloadResponse 
+                : JSON.stringify(downloadResponse || "");
+              const responseLower = responseString.toLowerCase();
+              const contains200OK = /\b200\s*ok\b/i.test(responseString) || 
+                                    responseLower.includes("200ok") ||
+                                    responseLower.includes("200 ok");
+              
+              // Check if API is in-flight (no data found, but API call exists)
+              const isInFlight = !downloadResponse?.success && 
+                                (responseMessage.includes("no data") || 
+                                 responseMessage.includes("not found") ||
+                                 responseMessage.includes("waiting") ||
+                                 !downloadResponse?.found);
+
+              if (downloadResponse && downloadResponse.success) {
+                console.log(
+                  `[Background] ✅ API response downloaded for URL ${i + 1}`,
+                );
+                processedUrls.push({ url: url, success: true, tabId: currentTab.id });
+                urlProcessed = true;
+              } else if ((contains200OK || isInFlight) && urlRetryCount < MAX_RETRIES_FOR_URL) {
+                // Response is 200-OK or in-flight, wait and retry
+                const retryAttempt = urlRetryCount + 1;
+                console.log(
+                  `[Background] ⚠️ URL ${i + 1} returned 200-OK or is in-flight. Pausing for 5 minutes before retry (attempt ${retryAttempt}/${MAX_RETRIES_FOR_URL + 1})...`,
+                );
+                
+                // Send alert to popup UI
+                chrome.runtime.sendMessage({
+                  action: "urlProcessingProgress",
+                  message: `⚠️ URL ${i + 1} returned 200-OK or is in-flight. Pausing for 5 minutes before retry (attempt ${retryAttempt}/${MAX_RETRIES_FOR_URL + 1})...`,
+                  alert: true,
+                  alertType: "warning",
+                }).catch(() => {});
+
+                // Close current tab before waiting
+                try {
+                  chrome.tabs.remove(currentTab.id);
+                } catch (error) {
+                  console.warn(`[Background] Could not close tab ${currentTab.id}:`, error);
+                }
+
+                // Wait 5 minutes
+                await new Promise((resolve) => setTimeout(resolve, PAUSE_ON_200_OK_OR_INFLIGHT));
+                
+                urlRetryCount++;
+                console.log(
+                  `[Background] 🔄 Retrying URL ${i + 1} after 5-minute pause (attempt ${retryAttempt + 1}/${MAX_RETRIES_FOR_URL + 1})...`,
+                );
+                
+                // Send alert to popup UI
+                chrome.runtime.sendMessage({
+                  action: "urlProcessingProgress",
+                  message: `🔄 Retrying URL ${i + 1} after 5-minute pause (attempt ${retryAttempt + 1}/${MAX_RETRIES_FOR_URL + 1})...`,
+                  alert: true,
+                  alertType: "info",
+                }).catch(() => {});
+
+                // Reopen the tab for retry
+                currentTab = await new Promise((resolve, reject) => {
+                  chrome.tabs.create({ url: url, active: false }, (newTab) => {
+                    if (chrome.runtime.lastError) {
+                      reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                      resolve(newTab);
+                    }
+                  });
+                });
+
+                console.log(`[Background] Tab reopened for retry:`, currentTab.id);
+
+                // Wait for page to load
+                await new Promise((resolve) => {
+                  let resolved = false;
+                  const listener = (tabId, changeInfo, tabInfo) => {
+                    if (tabId === currentTab.id && changeInfo.status === "complete") {
+                      if (!resolved) {
+                        resolved = true;
+                        chrome.tabs.onUpdated.removeListener(listener);
+                        resolve();
+                      }
+                    }
+                  };
+                  chrome.tabs.onUpdated.addListener(listener);
+
+                  setTimeout(() => {
+                    if (!resolved) {
+                      resolved = true;
+                      chrome.tabs.onUpdated.removeListener(listener);
+                      resolve();
+                    }
+                  }, 3000);
+                });
+
+                // Inject content script
+                try {
+                  await chrome.scripting.executeScript({
+                    target: { tabId: currentTab.id },
+                    files: ["content.js"],
+                  });
+                  console.log(
+                    `[Background] Content script injected for retry tab ${currentTab.id}`,
+                  );
+                } catch (error) {
+                  console.warn(
+                    `[Background] Content script injection warning on retry:`,
+                    error.message,
+                  );
+                }
+
+                // Wait a bit for page to initialize
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+                
+                continue; // Retry the request
+              } else {
+                // Not 200-OK or in-flight, but also not successful - treat as failure
+                console.warn(
+                  `[Background] ⚠️ API response not found for URL ${i + 1}`,
+                );
+                const failedUrl = {
+                  url: url,
+                  success: false,
+                  tabId: currentTab.id,
+                  error: downloadResponse?.message || "API response not found",
+                };
+                processedUrls.push(failedUrl);
+                failedUrls.push(failedUrl); // Track for retry
+                urlProcessed = true; // Mark as processed (even though failed)
+              }
+            } catch (error) {
+              console.error(
+                `[Background] Error downloading API for URL ${i + 1} (attempt ${urlRetryCount + 1}):`,
+                error,
               );
-              processedUrls.push({ url: url, success: true, tabId: tab.id });
-            } else {
-              console.warn(
-                `[Background] ⚠️ API response not found for URL ${i + 1}`,
-              );
-              const failedUrl = {
-                url: url,
-                success: false,
-                tabId: tab.id,
-                error: downloadResponse?.message,
-              };
-              processedUrls.push(failedUrl);
-              failedUrls.push(failedUrl); // Track for retry
+              
+              // If we haven't exhausted retries and it might be a transient error, retry
+              if (urlRetryCount < MAX_RETRIES_FOR_URL) {
+                const retryAttempt = urlRetryCount + 1;
+                console.log(
+                  `[Background] ⏳ Waiting 5 minutes before retry attempt ${retryAttempt + 1}/${MAX_RETRIES_FOR_URL + 1}...`,
+                );
+
+                chrome.runtime.sendMessage({
+                  action: "urlProcessingProgress",
+                  message: `⏳ Error on URL ${i + 1}. Waiting 5 minutes before retry attempt ${retryAttempt + 1}/${MAX_RETRIES_FOR_URL + 1}...`,
+                  alert: true,
+                  alertType: "warning",
+                }).catch(() => {});
+
+                // Close current tab before waiting
+                try {
+                  chrome.tabs.remove(currentTab.id);
+                } catch (closeError) {
+                  console.warn(`[Background] Could not close tab ${currentTab.id}:`, closeError);
+                }
+
+                await new Promise((resolve) => setTimeout(resolve, PAUSE_ON_200_OK_OR_INFLIGHT));
+                
+                urlRetryCount++;
+                
+                // Reopen the tab for retry
+                currentTab = await new Promise((resolve, reject) => {
+                  chrome.tabs.create({ url: url, active: false }, (newTab) => {
+                    if (chrome.runtime.lastError) {
+                      reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                      resolve(newTab);
+                    }
+                  });
+                });
+
+                // Wait for page to load
+                await new Promise((resolve) => {
+                  let resolved = false;
+                  const listener = (tabId, changeInfo, tabInfo) => {
+                    if (tabId === currentTab.id && changeInfo.status === "complete") {
+                      if (!resolved) {
+                        resolved = true;
+                        chrome.tabs.onUpdated.removeListener(listener);
+                        resolve();
+                      }
+                    }
+                  };
+                  chrome.tabs.onUpdated.addListener(listener);
+
+                  setTimeout(() => {
+                    if (!resolved) {
+                      resolved = true;
+                      chrome.tabs.onUpdated.removeListener(listener);
+                      resolve();
+                    }
+                  }, 3000);
+                });
+
+                // Inject content script
+                try {
+                  await chrome.scripting.executeScript({
+                    target: { tabId: currentTab.id },
+                    files: ["content.js"],
+                  });
+                } catch (injectError) {
+                  console.warn(
+                    `[Background] Content script injection warning on retry:`,
+                    injectError.message,
+                  );
+                }
+
+                // Wait a bit for page to initialize
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+                
+                continue; // Retry the request
+              } else {
+                // Max retries reached, mark as failed
+                const failedUrl = {
+                  url: url,
+                  success: false,
+                  tabId: currentTab.id,
+                  error: error.message,
+                };
+                processedUrls.push(failedUrl);
+                failedUrls.push(failedUrl); // Track for retry
+                urlProcessed = true; // Mark as processed (even though failed)
+              }
             }
-          } catch (error) {
-            console.error(
-              `[Background] Error downloading API for URL ${i + 1}:`,
-              error,
-            );
-            const failedUrl = {
-              url: url,
-              success: false,
-              tabId: tab.id,
-              error: error.message,
-            };
-            processedUrls.push(failedUrl);
-            failedUrls.push(failedUrl); // Track for retry
           }
+
+          // Update tab reference for closing
+          tab = currentTab;
 
           // Wait a bit more to ensure insertion completes
           await new Promise((resolve) => setTimeout(resolve, 500)); // Reduced from 1000ms
